@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ["python312", "python312Packages.pip", "chromium", "chromedriver"]
-
-[start]
-cmd = "python3 bot.py"
