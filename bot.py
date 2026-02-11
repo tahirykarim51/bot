@@ -12,39 +12,107 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 import requests
+import subprocess
+import shutil
 import time
 import os
 from datetime import datetime, timedelta
 
+
+# ── Détection dynamique des binaires Chrome/Chromium ─────────────────────────
+
+def find_binary(*candidates):
+    """Retourne le premier binaire trouvé dans la liste, ou None."""
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+        if os.path.isfile(name) and os.access(name, os.X_OK):
+            return name
+    return None
+
+def detect_chrome():
+    """Détecte le binaire Chrome/Chromium disponible sur le système."""
+    # 1. Variable d'environnement (priorité maximale)
+    env = os.getenv('GOOGLE_CHROME_BIN')
+    if env and os.path.isfile(env):
+        return env
+
+    # 2. Candidats courants (Railway Nix, Debian/Ubuntu, Alpine)
+    candidates = [
+        'chromium', 'chromium-browser', 'google-chrome',
+        'google-chrome-stable',
+        '/nix/var/nix/profiles/default/bin/chromium',
+        '/usr/bin/chromium', '/usr/bin/chromium-browser',
+        '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+    ]
+    found = find_binary(*candidates)
+    if found:
+        return found
+
+    # 3. Recherche large (lente, dernier recours)
+    try:
+        result = subprocess.run(
+            ['find', '/nix', '/usr', '/opt', '-name', 'chromium*', '-type', 'f'],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.splitlines():
+            if os.access(line, os.X_OK):
+                return line
+    except Exception:
+        pass
+
+    return None
+
+def detect_chromedriver():
+    """Détecte le binaire ChromeDriver disponible sur le système."""
+    env = os.getenv('CHROMEDRIVER_PATH')
+    if env and os.path.isfile(env):
+        return env
+
+    candidates = [
+        'chromedriver',
+        '/nix/var/nix/profiles/default/bin/chromedriver',
+        '/usr/bin/chromedriver',
+        '/usr/local/bin/chromedriver',
+    ]
+    return find_binary(*candidates)
+
+
+# ── Bot ───────────────────────────────────────────────────────────────────────
+
 class LinkedInCyberJobBot:
     def __init__(self):
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.chat_id   = os.getenv('TELEGRAM_CHAT_ID')
+        self.seen_jobs = {}   # stockage en mémoire (pas de disque persistant sur Railway free)
 
-        # ✅ Stockage en mémoire (Railway n'a pas de disque persistant sur le free plan)
-        # Les offres sont gardées pour la durée de vie du process (redémarre proprement)
-        self.seen_jobs = {}
-
-        # Mots-clés
         self.keywords_alternance = ['alternance', 'apprenti', 'apprentissage', 'alternant']
         self.keywords_cyber = [
             'cyber', 'cybersécurité', 'cybersecurity', 'soc', 'pentest',
             'red team', 'blue team', 'sécurité informatique', 'security',
             'siem', 'grc', 'analyste sécurité', 'devsecops', 'forensic',
-            'threat', 'vulnerability', 'incident response'
+            'threat', 'vulnerability', 'incident response',
         ]
-
         self.driver = None
 
     # ── Selenium ──────────────────────────────────────────────────────────────
 
     def setup_driver(self):
-        """
-        Configure Chrome pour Railway (Linux, sans interface graphique).
-        Railway installe Chromium via le buildpack heroku-buildpack-google-chrome.
-        """
+        chrome_bin    = detect_chrome()
+        chromedriver  = detect_chromedriver()
+
+        print(f"🔎 Chrome trouvé      : {chrome_bin}")
+        print(f"🔎 ChromeDriver trouvé: {chromedriver}")
+
+        if not chrome_bin:
+            raise RuntimeError("❌ Aucun binaire Chrome/Chromium trouvé sur ce système.")
+        if not chromedriver:
+            raise RuntimeError("❌ Aucun binaire ChromeDriver trouvé sur ce système.")
+
         options = Options()
-        options.add_argument('--headless')
+        options.binary_location = chrome_bin
+        options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
@@ -57,15 +125,8 @@ class LinkedInCyberJobBot:
             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
 
-        # Sur Railway le binaire Chrome est mis dans le PATH par le buildpack
-        chrome_bin = os.getenv('GOOGLE_CHROME_BIN', '/usr/bin/google-chrome')
-        chromedriver_path = os.getenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
-
-        options.binary_location = chrome_bin
-        service = Service(executable_path=chromedriver_path)
-
+        service = Service(executable_path=chromedriver)
         self.driver = webdriver.Chrome(service=service, options=options)
-        # Masquer la propriété navigator.webdriver
         self.driver.execute_cdp_cmd(
             'Page.addScriptToEvaluateOnNewDocument',
             {'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'}
@@ -75,15 +136,11 @@ class LinkedInCyberJobBot:
     # ── Scraping ──────────────────────────────────────────────────────────────
 
     def build_search_url(self):
-        keywords = "alternance cybersécurité OR alternance SOC OR apprenti cyber OR alternance pentest"
-        params = {
-            'keywords': keywords.replace(' ', '%20').replace('OR', 'OR'),
-            'location': 'France',
-            'f_TPR': 'r86400',   # dernières 24 h
-            'position': '1',
-            'pageNum': '0'
-        }
-        return "https://www.linkedin.com/jobs/search/?" + '&'.join(f"{k}={v}" for k, v in params.items())
+        keywords = 'alternance+cybersécurité+OR+alternance+SOC+OR+apprenti+cyber+OR+alternance+pentest'
+        return (
+            f"https://www.linkedin.com/jobs/search/?"
+            f"keywords={keywords}&location=France&f_TPR=r86400&position=1&pageNum=0"
+        )
 
     def check_keywords(self, text: str) -> bool:
         t = text.lower()
@@ -95,11 +152,9 @@ class LinkedInCyberJobBot:
     def scrape_jobs(self):
         try:
             url = self.build_search_url()
-            print(f"🔍 Scraping : {url}")
+            print(f"🔍 Scraping...")
             self.driver.get(url)
             time.sleep(5)
-
-            # Scroll pour déclencher le lazy-loading
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
 
@@ -110,10 +165,10 @@ class LinkedInCyberJobBot:
             new_jobs = []
             for card in job_cards:
                 try:
-                    title_elem   = card.find('h3', class_='base-search-card__title')
-                    company_elem = card.find('h4', class_='base-search-card__subtitle')
+                    title_elem    = card.find('h3', class_='base-search-card__title')
+                    company_elem  = card.find('h4', class_='base-search-card__subtitle')
                     location_elem = card.find('span', class_='job-search-card__location')
-                    link_elem    = card.find('a', class_='base-card__full-link')
+                    link_elem     = card.find('a', class_='base-card__full-link')
 
                     if not title_elem or not link_elem:
                         continue
@@ -130,9 +185,8 @@ class LinkedInCyberJobBot:
                         continue
 
                     job = {
-                        'id': job_id, 'title': title,
-                        'company': company, 'location': location,
-                        'url': job_url,
+                        'id': job_id, 'title': title, 'company': company,
+                        'location': location, 'url': job_url,
                         'found_at': datetime.now().isoformat()
                     }
                     self.seen_jobs[job_id] = job
@@ -176,7 +230,6 @@ class LinkedInCyberJobBot:
     # ── Nettoyage mémoire ─────────────────────────────────────────────────────
 
     def cleanup_old_jobs(self, days=3):
-        """Purge les offres vieilles de plus de X jours pour éviter une fuite mémoire."""
         cutoff = datetime.now() - timedelta(days=days)
         to_del = [jid for jid, j in self.seen_jobs.items()
                   if datetime.fromisoformat(j['found_at']) < cutoff]
