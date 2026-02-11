@@ -1,312 +1,191 @@
 """
-Bot de surveillance des offres d'alternance en cybersécurité sur LinkedIn
-Version adaptée pour Railway.app
+Bot LinkedIn Alternance Cybersécurité
+Version stable Railway sans Selenium
 
-⚙️ Variables d'environnement à définir sur Railway :
-   - TELEGRAM_BOT_TOKEN
-   - TELEGRAM_CHAT_ID
+Variables d'environnement requises
+- TELEGRAM_BOT_TOKEN
+- TELEGRAM_CHAT_ID
 """
 
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException
-from bs4 import BeautifulSoup
 import requests
-import shutil
+from bs4 import BeautifulSoup
 import time
 import os
-import tempfile
+import json
 from datetime import datetime, timedelta
 
+# ================== CONFIG ==================
 
-# ── Détection dynamique des binaires ─────────────────────────────────────────
+CHECK_INTERVAL = 60
+MAX_AGE_HOURS = 24
+SEEN_FILE = "seen_jobs.json"
 
-def find_binary(*candidates):
-    for name in candidates:
-        path = shutil.which(name)
-        if path:
-            return path
-        if os.path.isfile(name) and os.access(name, os.X_OK):
-            return name
-    return None
+KEYWORDS_ALTERNANCE = [
+    "alternance", "alternant", "apprenti", "apprentissage"
+]
 
-def detect_chrome():
-    env = os.getenv('GOOGLE_CHROME_BIN')
-    if env and os.path.isfile(env):
-        return env
-    return find_binary(
-        'chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
-        '/root/.nix-profile/bin/chromium',
-        '/nix/var/nix/profiles/default/bin/chromium',
-        '/usr/bin/chromium', '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome',
-    )
+KEYWORDS_CYBER = [
+    "cyber", "cybersécurité", "cybersecurity", "soc", "pentest",
+    "red team", "blue team", "sécurité", "siem", "grc",
+    "devsecops", "forensic", "incident", "threat", "vulnerability"
+]
 
-def detect_chromedriver():
-    env = os.getenv('CHROMEDRIVER_PATH')
-    if env and os.path.isfile(env):
-        return env
-    return find_binary(
-        'chromedriver',
-        '/root/.nix-profile/bin/chromedriver',
-        '/nix/var/nix/profiles/default/bin/chromedriver',
-        '/usr/bin/chromedriver',
-        '/usr/local/bin/chromedriver',
-    )
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"
+}
+
+# ============================================
 
 
-# ── Bot ───────────────────────────────────────────────────────────────────────
-
-class LinkedInCyberJobBot:
+class LinkedInCyberBot:
     def __init__(self):
-        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id   = os.getenv('TELEGRAM_CHAT_ID')
-        self.seen_jobs = {}
+        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-        self.keywords_alternance = ['alternance', 'apprenti', 'apprentissage', 'alternant']
-        self.keywords_cyber = [
-            'cyber', 'cybersécurité', 'cybersecurity', 'soc', 'pentest',
-            'red team', 'blue team', 'sécurité informatique', 'security',
-            'siem', 'grc', 'analyste sécurité', 'devsecops', 'forensic',
-            'threat', 'vulnerability', 'incident response',
-        ]
+        if not self.bot_token or not self.chat_id:
+            raise RuntimeError("Variables TELEGRAM manquantes")
 
-        self.chrome_bin   = detect_chrome()
-        self.chromedriver = detect_chromedriver()
-        self.driver       = None
+        self.seen_jobs = self.load_seen_jobs()
 
-        print(f"🔎 Chrome trouvé      : {self.chrome_bin}")
-        print(f"🔎 ChromeDriver trouvé: {self.chromedriver}")
+    # ── Utils ────────────────────────────────
 
-        if not self.chrome_bin:
-            raise RuntimeError("❌ Aucun binaire Chrome/Chromium trouvé.")
-        if not self.chromedriver:
-            raise RuntimeError("❌ Aucun binaire ChromeDriver trouvé.")
+    def load_seen_jobs(self):
+        if os.path.exists(SEEN_FILE):
+            with open(SEEN_FILE, "r") as f:
+                return json.load(f)
+        return {}
 
-    # ── Selenium ──────────────────────────────────────────────────────────────
+    def save_seen_jobs(self):
+        with open(SEEN_FILE, "w") as f:
+            json.dump(self.seen_jobs, f)
 
-    def build_options(self):
-       options = Options()
-       options.binary_location = self.chrome_bin
-   
-       options.add_argument('--headless')
-       options.add_argument('--no-sandbox')
-       options.add_argument('--disable-dev-shm-usage')
-   
-       options.add_argument('--disable-gpu')
-       options.add_argument('--disable-software-rasterizer')
-       options.add_argument('--disable-extensions')
-       options.add_argument('--disable-background-networking')
-       options.add_argument('--disable-default-apps')
-       options.add_argument('--disable-sync')
-       options.add_argument('--disable-translate')
-       options.add_argument('--no-first-run')
-       options.add_argument('--window-size=1280,800')
-       options.add_argument('--ignore-certificate-errors')
-       options.add_argument('--disable-blink-features=AutomationControlled')
-   
-       options.add_argument('--single-process')
-       options.add_argument('--disable-features=VizDisplayCompositor')
-       options.add_argument('--disable-ipc-flooding-protection')
-   
-       options.add_experimental_option('excludeSwitches', ['enable-automation'])
-       options.add_experimental_option('useAutomationExtension', False)
-   
-       options.add_argument(
-           'user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-       )
-   
-       return options
+    def is_recent(self, iso_date):
+        dt = datetime.fromisoformat(iso_date)
+        return datetime.now() - dt <= timedelta(hours=MAX_AGE_HOURS)
 
-    def start_driver(self):
-        self.quit_driver()
-        service = Service(executable_path=self.chromedriver)
-        self.driver = webdriver.Chrome(service=service, options=self.build_options())
-        self.driver.set_page_load_timeout(30)
-        self.driver.execute_cdp_cmd(
-            'Page.addScriptToEvaluateOnNewDocument',
-            {'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'}
-        )
-        print("✅ Chrome headless démarré")
-
-    def quit_driver(self):
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
-            self.driver = None
-
-    def is_driver_alive(self):
-        try:
-            _ = self.driver.current_url
-            return True
-        except Exception:
-            return False
-
-    # ── Scraping ──────────────────────────────────────────────────────────────
-
-    def build_search_url(self):
-        keywords = 'alternance+cybersécurité+OR+alternance+SOC+OR+apprenti+cyber+OR+alternance+pentest'
-        return (
-            'https://www.linkedin.com/jobs/search/?'
-            f'keywords={keywords}&location=France&f_TPR=r86400&position=1&pageNum=0'
-        )
-
-    def check_keywords(self, text: str) -> bool:
+    def check_keywords(self, text):
         t = text.lower()
         return (
-            any(k in t for k in self.keywords_alternance) and
-            any(k in t for k in self.keywords_cyber)
+            any(k in t for k in KEYWORDS_ALTERNANCE)
+            and any(k in t for k in KEYWORDS_CYBER)
         )
+
+    # ── LinkedIn scraping ────────────────────
 
     def scrape_jobs(self):
-        if not self.is_driver_alive():
-            print("🔁 Chrome mort, redémarrage...")
-            self.start_driver()
-            time.sleep(3)
+        print("🔍 Scraping LinkedIn guest API")
 
-        try:
-            print("🔍 Scraping...")
-            self.driver.get(self.build_search_url())
-            time.sleep(6)
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
+        base_url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+        params = {
+            "keywords": "alternance cybersécurité",
+            "location": "France",
+            "f_TPR": "r86400",
+            "start": 0
+        }
 
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            job_cards = soup.find_all('div', class_='base-card')
-            print(f"   {len(job_cards)} carte(s) trouvée(s)")
-
-            new_jobs = []
-            for card in job_cards:
-                try:
-                    title_elem    = card.find('h3', class_='base-search-card__title')
-                    company_elem  = card.find('h4', class_='base-search-card__subtitle')
-                    location_elem = card.find('span', class_='job-search-card__location')
-                    link_elem     = card.find('a', class_='base-card__full-link')
-
-                    if not title_elem or not link_elem:
-                        continue
-
-                    title    = title_elem.text.strip()
-                    company  = company_elem.text.strip() if company_elem else "N/A"
-                    location = location_elem.text.strip() if location_elem else "France"
-                    job_url  = link_elem['href'].split('?')[0]
-                    job_id   = job_url.split('/')[-1] or str(hash(job_url))
-
-                    if not self.check_keywords(f"{title} {company}"):
-                        continue
-                    if job_id in self.seen_jobs:
-                        continue
-
-                    job = {
-                        'id': job_id, 'title': title, 'company': company,
-                        'location': location, 'url': job_url,
-                        'found_at': datetime.now().isoformat()
-                    }
-                    self.seen_jobs[job_id] = job
-                    new_jobs.append(job)
-
-                except Exception as e:
-                    print(f"⚠️ Erreur carte : {e}")
-
-            return new_jobs
-
-        except WebDriverException as e:
-            first_line = (e.msg or str(e)).splitlines()[0]
-            print(f"❌ WebDriver crash : {first_line}")
-            self.quit_driver()
-            return []
-        except Exception as e:
-            print(f"❌ Erreur scraping : {e}")
+        r = requests.get(base_url, headers=HEADERS, params=params, timeout=15)
+        if r.status_code != 200:
+            print("❌ HTTP", r.status_code)
             return []
 
-    # ── Telegram ──────────────────────────────────────────────────────────────
+        soup = BeautifulSoup(r.text, "html.parser")
+        cards = soup.find_all("li")
+
+        new_jobs = []
+
+        for card in cards:
+            try:
+                title_el = card.find("h3")
+                company_el = card.find("h4")
+                link_el = card.find("a", href=True)
+
+                if not title_el or not link_el:
+                    continue
+
+                title = title_el.text.strip()
+                company = company_el.text.strip() if company_el else "N/A"
+                url = "https://www.linkedin.com" + link_el["href"].split("?")[0]
+                job_id = url.split("-")[-1]
+
+                text_blob = f"{title} {company}"
+
+                if not self.check_keywords(text_blob):
+                    continue
+
+                if job_id in self.seen_jobs:
+                    continue
+
+                job = {
+                    "id": job_id,
+                    "title": title,
+                    "company": company,
+                    "location": "France",
+                    "url": url,
+                    "found_at": datetime.now().isoformat()
+                }
+
+                self.seen_jobs[job_id] = job
+                new_jobs.append(job)
+
+            except Exception as e:
+                print("⚠️ Parse error", e)
+
+        self.save_seen_jobs()
+        return new_jobs
+
+    # ── Telegram ─────────────────────────────
 
     def send_telegram(self, job):
-        found_dt = datetime.fromisoformat(job['found_at']).strftime('%d/%m/%Y à %H:%M')
+        dt = datetime.fromisoformat(job["found_at"]).strftime("%d/%m/%Y %H:%M")
+
         message = (
-            "🚨 *Nouvelle alternance cybersécurité !*\n\n"
-            f"📋 *Poste :* {job['title']}\n"
-            f"🏢 *Entreprise :* {job['company']}\n"
-            f"📍 *Lieu :* {job['location']}\n"
-            f"🔗 *Lien :* {job['url']}\n\n"
-            f"⏰ Trouvée le {found_dt}"
+            "🚨 Nouvelle alternance cybersécurité\n\n"
+            f"📋 Poste : {job['title']}\n"
+            f"🏢 Entreprise : {job['company']}\n"
+            f"📍 Lieu : {job['location']}\n\n"
+            f"🔗 {job['url']}\n\n"
+            f"⏰ Trouvée le {dt}"
         )
-        try:
-            r = requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                data={'chat_id': self.chat_id, 'text': message,
-                      'parse_mode': 'Markdown', 'disable_web_page_preview': False},
-                timeout=10
-            )
-            if r.status_code == 200:
-                print(f"✅ Notif envoyée : {job['title']}")
-            else:
-                print(f"❌ Échec notif : {r.text}")
-        except Exception as e:
-            print(f"❌ Erreur Telegram : {e}")
 
-    # ── Nettoyage ─────────────────────────────────────────────────────────────
+        r = requests.post(
+            f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+            data={
+                "chat_id": self.chat_id,
+                "text": message,
+                "disable_web_page_preview": False
+            },
+            timeout=10
+        )
 
-    def cleanup_old_jobs(self, days=3):
-        cutoff = datetime.now() - timedelta(days=days)
-        to_del = [jid for jid, j in self.seen_jobs.items()
-                  if datetime.fromisoformat(j['found_at']) < cutoff]
-        for jid in to_del:
-            del self.seen_jobs[jid]
-        if to_del:
-            print(f"🧹 {len(to_del)} ancienne(s) offre(s) purgée(s)")
+        if r.status_code == 200:
+            print("✅ Notification envoyée")
+        else:
+            print("❌ Erreur Telegram", r.text)
 
-    # ── Boucle principale ─────────────────────────────────────────────────────
+    # ── Boucle principale ────────────────────
 
-    def run(self, interval=60):
-        print("🚀 Bot démarré sur Railway")
-        print(f"⏱️  Intervalle : {interval}s")
+    def run(self):
+        print("🚀 Bot LinkedIn Alternance Cybersécurité lancé")
 
-        self.start_driver()
-        iteration = 0
+        while True:
+            try:
+                jobs = self.scrape_jobs()
 
-        try:
-            while True:
-                iteration += 1
-                print(f"\n{'='*55}")
-                print(f"🔄 #{iteration} — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-
-                new_jobs = self.scrape_jobs()
-
-                if new_jobs:
-                    print(f"🎉 {len(new_jobs)} nouvelle(s) offre(s) !")
-                    for job in new_jobs:
+                if jobs:
+                    print(f"🎉 {len(jobs)} nouvelle(s) offre(s)")
+                    for job in jobs:
                         self.send_telegram(job)
                         time.sleep(1)
                 else:
-                    print("ℹ️  Aucune nouvelle offre")
+                    print("ℹ️ Aucune nouvelle offre")
 
-                if iteration % 30 == 0:
-                    self.cleanup_old_jobs()
-                    print("🔁 Redémarrage préventif de Chrome...")
-                    self.start_driver()
+                time.sleep(CHECK_INTERVAL)
 
-                print(f"💤 Pause {interval}s...")
-                time.sleep(interval)
-
-        except KeyboardInterrupt:
-            print("\n⛔ Arrêt manuel")
-        except Exception as e:
-            print(f"💥 Erreur fatale : {e}")
-            raise
-        finally:
-            self.quit_driver()
-            print("👋 Chrome fermé")
+            except Exception as e:
+                print("💥 Erreur fatale", e)
+                time.sleep(10)
 
 
-if __name__ == '__main__':
-    missing = [v for v in ('TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID') if not os.getenv(v)]
-    if missing:
-        print(f"❌ Variable(s) manquante(s) : {', '.join(missing)}")
-        exit(1)
-
-    LinkedInCyberJobBot().run(interval=60)
+if __name__ == "__main__":
+    LinkedInCyberBot().run()
