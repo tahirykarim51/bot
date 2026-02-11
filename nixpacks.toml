@@ -1,13 +1,11 @@
 # nixpacks.toml
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "chromium", "chromedriver"]
+nixPkgs = ["python312", "chromium", "chromedriver"]
 
 [phases.install]
-cmds = ["python3 -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"]
+cmds = [
+  "pip install -r requirements.txt"
+]
 
 [start]
 cmd = "python3 bot.py"
-
-[variables]
-GOOGLE_CHROME_BIN = "/nix/var/nix/profiles/default/bin/chromium"
-CHROMEDRIVER_PATH = "/nix/var/nix/profiles/default/bin/chromedriver"
