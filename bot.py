@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 import time
 import os
 import json
+import hashlib
 from datetime import datetime, timedelta
 
 # ================== CONFIG ==================
@@ -52,17 +53,16 @@ class LinkedInCyberBot:
 
     def load_seen_jobs(self):
         if os.path.exists(SEEN_FILE):
-            with open(SEEN_FILE, "r") as f:
-                return json.load(f)
+            try:
+                with open(SEEN_FILE, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
         return {}
 
     def save_seen_jobs(self):
         with open(SEEN_FILE, "w") as f:
             json.dump(self.seen_jobs, f)
-
-    def is_recent(self, iso_date):
-        dt = datetime.fromisoformat(iso_date)
-        return datetime.now() - dt <= timedelta(hours=MAX_AGE_HOURS)
 
     def check_keywords(self, text):
         t = text.lower()
@@ -105,15 +105,16 @@ class LinkedInCyberBot:
 
                 title = title_el.text.strip()
                 company = company_el.text.strip() if company_el else "N/A"
+
                 url = "https://www.linkedin.com" + link_el["href"].split("?")[0]
-                job_id = url.split("-")[-1]
 
-                text_blob = f"{title} {company}"
-
-                if not self.check_keywords(text_blob):
-                    continue
+                job_id = hashlib.sha256(url.encode()).hexdigest()
 
                 if job_id in self.seen_jobs:
+                    continue
+
+                text_blob = f"{title} {company}"
+                if not self.check_keywords(text_blob):
                     continue
 
                 job = {
@@ -126,12 +127,12 @@ class LinkedInCyberBot:
                 }
 
                 self.seen_jobs[job_id] = job
+                self.save_seen_jobs()
                 new_jobs.append(job)
 
             except Exception as e:
                 print("⚠️ Parse error", e)
 
-        self.save_seen_jobs()
         return new_jobs
 
     # ── Telegram ─────────────────────────────
