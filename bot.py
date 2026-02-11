@@ -13,10 +13,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException
 from bs4 import BeautifulSoup
 import requests
-import subprocess
 import shutil
 import time
 import os
+import tempfile
 from datetime import datetime, timedelta
 
 
@@ -72,9 +72,9 @@ class LinkedInCyberJobBot:
             'threat', 'vulnerability', 'incident response',
         ]
 
-        self.chrome_bin     = detect_chrome()
-        self.chromedriver   = detect_chromedriver()
-        self.driver         = None
+        self.chrome_bin   = detect_chrome()
+        self.chromedriver = detect_chromedriver()
+        self.driver       = None
 
         print(f"🔎 Chrome trouvé      : {self.chrome_bin}")
         print(f"🔎 ChromeDriver trouvé: {self.chromedriver}")
@@ -90,11 +90,18 @@ class LinkedInCyberJobBot:
         options = Options()
         options.binary_location = self.chrome_bin
 
-        # ✅ Flags indispensables pour survivre dans un conteneur
+        # Indispensable en conteneur
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')   # contourne /dev/shm trop petit
-        options.add_argument('--shm-size=256m')
+        options.add_argument('--disable-dev-shm-usage')
+
+        # ✅ Remplace /dev/shm par un dossier tmp normal sur le disque
+        tmp_dir = tempfile.mkdtemp(prefix='chrome-shm-')
+        options.add_argument(f'--disk-cache-dir={tmp_dir}')
+        options.add_argument('--media-cache-size=0')
+        options.add_argument('--disk-cache-size=0')
+
+        # Stabilité renderer
         options.add_argument('--disable-gpu')
         options.add_argument('--disable-software-rasterizer')
         options.add_argument('--disable-extensions')
@@ -102,15 +109,12 @@ class LinkedInCyberJobBot:
         options.add_argument('--disable-default-apps')
         options.add_argument('--disable-sync')
         options.add_argument('--disable-translate')
-        options.add_argument('--hide-scrollbars')
-        options.add_argument('--metrics-recording-only')
-        options.add_argument('--mute-audio')
+        options.add_argument('--disable-web-security')
         options.add_argument('--no-first-run')
-        options.add_argument('--safebrowsing-disable-auto-update')
+        options.add_argument('--no-zygote')             # ✅ désactive le processus zygote (inutile en headless)
+        options.add_argument('--window-size=1280,800')
         options.add_argument('--ignore-certificate-errors')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--single-process')           # ✅ clé pour les conteneurs à faible mémoire
-        options.add_argument('--remote-debugging-port=0')  # ✅ évite le conflit DevTools
+        options.add_argument('--allow-running-insecure-content')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option('excludeSwitches', ['enable-automation'])
         options.add_experimental_option('useAutomationExtension', False)
@@ -121,7 +125,6 @@ class LinkedInCyberJobBot:
         return options
 
     def start_driver(self):
-        """Démarre ou redémarre le driver Chrome."""
         self.quit_driver()
         service = Service(executable_path=self.chromedriver)
         self.driver = webdriver.Chrome(service=service, options=self.build_options())
@@ -164,7 +167,6 @@ class LinkedInCyberJobBot:
         )
 
     def scrape_jobs(self):
-        # Redémarrer Chrome si mort
         if not self.is_driver_alive():
             print("🔁 Chrome mort, redémarrage...")
             self.start_driver()
@@ -217,7 +219,8 @@ class LinkedInCyberJobBot:
             return new_jobs
 
         except WebDriverException as e:
-            print(f"❌ WebDriver crash : {e.msg.splitlines()[0] if e.msg else e}")
+            first_line = (e.msg or str(e)).splitlines()[0]
+            print(f"❌ WebDriver crash : {first_line}")
             self.quit_driver()
             return []
         except Exception as e:
@@ -250,7 +253,7 @@ class LinkedInCyberJobBot:
         except Exception as e:
             print(f"❌ Erreur Telegram : {e}")
 
-    # ── Nettoyage mémoire ─────────────────────────────────────────────────────
+    # ── Nettoyage ─────────────────────────────────────────────────────────────
 
     def cleanup_old_jobs(self, days=3):
         cutoff = datetime.now() - timedelta(days=days)
@@ -286,9 +289,8 @@ class LinkedInCyberJobBot:
                 else:
                     print("ℹ️  Aucune nouvelle offre")
 
-                if iteration % 50 == 0:
+                if iteration % 30 == 0:
                     self.cleanup_old_jobs()
-                    # Redémarrage préventif de Chrome toutes les 50 itérations
                     print("🔁 Redémarrage préventif de Chrome...")
                     self.start_driver()
 
