@@ -87,42 +87,38 @@ class LinkedInCyberJobBot:
     # ── Selenium ──────────────────────────────────────────────────────────────
 
     def build_options(self):
-        options = Options()
-        options.binary_location = self.chrome_bin
-
-        # Indispensable en conteneur
-        options.add_argument('--headless=new')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-
-        # ✅ Remplace /dev/shm par un dossier tmp normal sur le disque
-        tmp_dir = tempfile.mkdtemp(prefix='chrome-shm-')
-        options.add_argument(f'--disk-cache-dir={tmp_dir}')
-        options.add_argument('--media-cache-size=0')
-        options.add_argument('--disk-cache-size=0')
-
-        # Stabilité renderer
-        options.add_argument('--disable-gpu')
-        options.add_argument('--disable-software-rasterizer')
-        options.add_argument('--disable-extensions')
-        options.add_argument('--disable-background-networking')
-        options.add_argument('--disable-default-apps')
-        options.add_argument('--disable-sync')
-        options.add_argument('--disable-translate')
-        options.add_argument('--disable-web-security')
-        options.add_argument('--no-first-run')
-        options.add_argument('--no-zygote')             # ✅ désactive le processus zygote (inutile en headless)
-        options.add_argument('--window-size=1280,800')
-        options.add_argument('--ignore-certificate-errors')
-        options.add_argument('--allow-running-insecure-content')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_experimental_option('excludeSwitches', ['enable-automation'])
-        options.add_experimental_option('useAutomationExtension', False)
-        options.add_argument(
-            'user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
-        )
-        return options
+       options = Options()
+       options.binary_location = self.chrome_bin
+   
+       options.add_argument('--headless')
+       options.add_argument('--no-sandbox')
+       options.add_argument('--disable-dev-shm-usage')
+   
+       options.add_argument('--disable-gpu')
+       options.add_argument('--disable-software-rasterizer')
+       options.add_argument('--disable-extensions')
+       options.add_argument('--disable-background-networking')
+       options.add_argument('--disable-default-apps')
+       options.add_argument('--disable-sync')
+       options.add_argument('--disable-translate')
+       options.add_argument('--no-first-run')
+       options.add_argument('--window-size=1280,800')
+       options.add_argument('--ignore-certificate-errors')
+       options.add_argument('--disable-blink-features=AutomationControlled')
+   
+       options.add_argument('--single-process')
+       options.add_argument('--disable-features=VizDisplayCompositor')
+       options.add_argument('--disable-ipc-flooding-protection')
+   
+       options.add_experimental_option('excludeSwitches', ['enable-automation'])
+       options.add_experimental_option('useAutomationExtension', False)
+   
+       options.add_argument(
+           'user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+           '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+       )
+   
+       return options
 
     def start_driver(self):
         self.quit_driver()
