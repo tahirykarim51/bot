@@ -10,6 +10,7 @@ Version adaptée pour Railway.app
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import WebDriverException
 from bs4 import BeautifulSoup
 import requests
 import subprocess
@@ -19,10 +20,9 @@ import os
 from datetime import datetime, timedelta
 
 
-# ── Détection dynamique des binaires Chrome/Chromium ─────────────────────────
+# ── Détection dynamique des binaires ─────────────────────────────────────────
 
 def find_binary(*candidates):
-    """Retourne le premier binaire trouvé dans la liste, ou None."""
     for name in candidates:
         path = shutil.which(name)
         if path:
@@ -32,51 +32,28 @@ def find_binary(*candidates):
     return None
 
 def detect_chrome():
-    """Détecte le binaire Chrome/Chromium disponible sur le système."""
-    # 1. Variable d'environnement (priorité maximale)
     env = os.getenv('GOOGLE_CHROME_BIN')
     if env and os.path.isfile(env):
         return env
-
-    # 2. Candidats courants (Railway Nix, Debian/Ubuntu, Alpine)
-    candidates = [
-        'chromium', 'chromium-browser', 'google-chrome',
-        'google-chrome-stable',
+    return find_binary(
+        'chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
+        '/root/.nix-profile/bin/chromium',
         '/nix/var/nix/profiles/default/bin/chromium',
         '/usr/bin/chromium', '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-    ]
-    found = find_binary(*candidates)
-    if found:
-        return found
-
-    # 3. Recherche large (lente, dernier recours)
-    try:
-        result = subprocess.run(
-            ['find', '/nix', '/usr', '/opt', '-name', 'chromium*', '-type', 'f'],
-            capture_output=True, text=True, timeout=10
-        )
-        for line in result.stdout.splitlines():
-            if os.access(line, os.X_OK):
-                return line
-    except Exception:
-        pass
-
-    return None
+        '/usr/bin/google-chrome',
+    )
 
 def detect_chromedriver():
-    """Détecte le binaire ChromeDriver disponible sur le système."""
     env = os.getenv('CHROMEDRIVER_PATH')
     if env and os.path.isfile(env):
         return env
-
-    candidates = [
+    return find_binary(
         'chromedriver',
+        '/root/.nix-profile/bin/chromedriver',
         '/nix/var/nix/profiles/default/bin/chromedriver',
         '/usr/bin/chromedriver',
         '/usr/local/bin/chromedriver',
-    ]
-    return find_binary(*candidates)
+    )
 
 
 # ── Bot ───────────────────────────────────────────────────────────────────────
@@ -85,7 +62,7 @@ class LinkedInCyberJobBot:
     def __init__(self):
         self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.chat_id   = os.getenv('TELEGRAM_CHAT_ID')
-        self.seen_jobs = {}   # stockage en mémoire (pas de disque persistant sur Railway free)
+        self.seen_jobs = {}
 
         self.keywords_alternance = ['alternance', 'apprenti', 'apprentissage', 'alternant']
         self.keywords_cyber = [
@@ -94,52 +71,89 @@ class LinkedInCyberJobBot:
             'siem', 'grc', 'analyste sécurité', 'devsecops', 'forensic',
             'threat', 'vulnerability', 'incident response',
         ]
-        self.driver = None
+
+        self.chrome_bin     = detect_chrome()
+        self.chromedriver   = detect_chromedriver()
+        self.driver         = None
+
+        print(f"🔎 Chrome trouvé      : {self.chrome_bin}")
+        print(f"🔎 ChromeDriver trouvé: {self.chromedriver}")
+
+        if not self.chrome_bin:
+            raise RuntimeError("❌ Aucun binaire Chrome/Chromium trouvé.")
+        if not self.chromedriver:
+            raise RuntimeError("❌ Aucun binaire ChromeDriver trouvé.")
 
     # ── Selenium ──────────────────────────────────────────────────────────────
 
-    def setup_driver(self):
-        chrome_bin    = detect_chrome()
-        chromedriver  = detect_chromedriver()
-
-        print(f"🔎 Chrome trouvé      : {chrome_bin}")
-        print(f"🔎 ChromeDriver trouvé: {chromedriver}")
-
-        if not chrome_bin:
-            raise RuntimeError("❌ Aucun binaire Chrome/Chromium trouvé sur ce système.")
-        if not chromedriver:
-            raise RuntimeError("❌ Aucun binaire ChromeDriver trouvé sur ce système.")
-
+    def build_options(self):
         options = Options()
-        options.binary_location = chrome_bin
+        options.binary_location = self.chrome_bin
+
+        # ✅ Flags indispensables pour survivre dans un conteneur
         options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-dev-shm-usage')   # contourne /dev/shm trop petit
+        options.add_argument('--shm-size=256m')
         options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-background-networking')
+        options.add_argument('--disable-default-apps')
+        options.add_argument('--disable-sync')
+        options.add_argument('--disable-translate')
+        options.add_argument('--hide-scrollbars')
+        options.add_argument('--metrics-recording-only')
+        options.add_argument('--mute-audio')
+        options.add_argument('--no-first-run')
+        options.add_argument('--safebrowsing-disable-auto-update')
+        options.add_argument('--ignore-certificate-errors')
         options.add_argument('--window-size=1920,1080')
+        options.add_argument('--single-process')           # ✅ clé pour les conteneurs à faible mémoire
+        options.add_argument('--remote-debugging-port=0')  # ✅ évite le conflit DevTools
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option('excludeSwitches', ['enable-automation'])
         options.add_experimental_option('useAutomationExtension', False)
         options.add_argument(
             'user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
         )
+        return options
 
-        service = Service(executable_path=chromedriver)
-        self.driver = webdriver.Chrome(service=service, options=options)
+    def start_driver(self):
+        """Démarre ou redémarre le driver Chrome."""
+        self.quit_driver()
+        service = Service(executable_path=self.chromedriver)
+        self.driver = webdriver.Chrome(service=service, options=self.build_options())
+        self.driver.set_page_load_timeout(30)
         self.driver.execute_cdp_cmd(
             'Page.addScriptToEvaluateOnNewDocument',
             {'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'}
         )
         print("✅ Chrome headless démarré")
 
+    def quit_driver(self):
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+
+    def is_driver_alive(self):
+        try:
+            _ = self.driver.current_url
+            return True
+        except Exception:
+            return False
+
     # ── Scraping ──────────────────────────────────────────────────────────────
 
     def build_search_url(self):
         keywords = 'alternance+cybersécurité+OR+alternance+SOC+OR+apprenti+cyber+OR+alternance+pentest'
         return (
-            f"https://www.linkedin.com/jobs/search/?"
-            f"keywords={keywords}&location=France&f_TPR=r86400&position=1&pageNum=0"
+            'https://www.linkedin.com/jobs/search/?'
+            f'keywords={keywords}&location=France&f_TPR=r86400&position=1&pageNum=0'
         )
 
     def check_keywords(self, text: str) -> bool:
@@ -150,13 +164,18 @@ class LinkedInCyberJobBot:
         )
 
     def scrape_jobs(self):
+        # Redémarrer Chrome si mort
+        if not self.is_driver_alive():
+            print("🔁 Chrome mort, redémarrage...")
+            self.start_driver()
+            time.sleep(3)
+
         try:
-            url = self.build_search_url()
-            print(f"🔍 Scraping...")
-            self.driver.get(url)
-            time.sleep(5)
+            print("🔍 Scraping...")
+            self.driver.get(self.build_search_url())
+            time.sleep(6)
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            time.sleep(3)
 
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             job_cards = soup.find_all('div', class_='base-card')
@@ -197,6 +216,10 @@ class LinkedInCyberJobBot:
 
             return new_jobs
 
+        except WebDriverException as e:
+            print(f"❌ WebDriver crash : {e.msg.splitlines()[0] if e.msg else e}")
+            self.quit_driver()
+            return []
         except Exception as e:
             print(f"❌ Erreur scraping : {e}")
             return []
@@ -244,7 +267,7 @@ class LinkedInCyberJobBot:
         print("🚀 Bot démarré sur Railway")
         print(f"⏱️  Intervalle : {interval}s")
 
-        self.setup_driver()
+        self.start_driver()
         iteration = 0
 
         try:
@@ -265,6 +288,9 @@ class LinkedInCyberJobBot:
 
                 if iteration % 50 == 0:
                     self.cleanup_old_jobs()
+                    # Redémarrage préventif de Chrome toutes les 50 itérations
+                    print("🔁 Redémarrage préventif de Chrome...")
+                    self.start_driver()
 
                 print(f"💤 Pause {interval}s...")
                 time.sleep(interval)
@@ -275,8 +301,7 @@ class LinkedInCyberJobBot:
             print(f"💥 Erreur fatale : {e}")
             raise
         finally:
-            if self.driver:
-                self.driver.quit()
+            self.quit_driver()
             print("👋 Chrome fermé")
 
 
