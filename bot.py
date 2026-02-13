@@ -23,7 +23,7 @@ MAX_AGE_HOURS = 24
 SEEN_FILE = "seen_jobs.json"
 
 KEYWORDS_ALTERNANCE = [
-    "alternance", "alternant", "apprenti", "apprentissage"
+    "alternance", "alternant", "apprenti", "apprenti(e)", "apprentissage"
 ]
 
 KEYWORDS_CYBER = [
