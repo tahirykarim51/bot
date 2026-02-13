@@ -13,6 +13,7 @@ import time
 import os
 import json
 import hashlib
+import random
 from datetime import datetime, timedelta
 
 # ================== CONFIG ==================
@@ -26,8 +27,19 @@ KEYWORDS_ALTERNANCE = [
 ]
 
 KEYWORDS_CYBER = [
-    "cyber", "cybersécurité", "cybersecurity", "soc", "pentest",
-    "red team", "blue team", "sécurité", "siem", "grc",
+    "cyber", "cybersécurité", "cybersecurity",
+    "security", "sécurité", "securite",
+    "it security", "information security",
+    "aws", "azure", "firewall", "pare-feu", "réseau", "réseaux", "network",
+    "ssi", "pssi", "iso 27001",
+    "soc", "siem", "csirt", "cert",
+    "edr", "xdr", "dlp", "waf", "ids", "ips",
+    "pentest", "pentester",
+    "red team", "blue team",
+    "grc", "gouvernance", "risque", "conformité",
+    "rgpd", "gdpr", "ebios", "cnil", "dora", "pca", "pra",
+    "iam", "pam", "active directory",
+    "infrastructure sécurisée", "sécurisé", "sécurisées",
     "devsecops", "forensic", "incident", "threat", "vulnerability"
 ]
 
@@ -180,8 +192,8 @@ class LinkedInCyberBot:
                         time.sleep(1)
                 else:
                     print("ℹ️ Aucune nouvelle offre")
-
-                time.sleep(CHECK_INTERVAL)
+                delay = CHECK_INTERVAL + random.randint(0, 60)
+                time.sleep(delay)
 
             except Exception as e:
                 print("💥 Erreur fatale", e)
