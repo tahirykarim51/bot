@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 # ================== CONFIG ==================
 
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 300
 MAX_AGE_HOURS = 24
 SEEN_FILE = "seen_jobs.json"
 
@@ -192,7 +192,7 @@ class LinkedInCyberBot:
                         time.sleep(1)
                 else:
                     print("ℹ️ Aucune nouvelle offre")
-                delay = CHECK_INTERVAL + random.randint(0, 60)
+                delay = CHECK_INTERVAL + random.randint(0, 300)
                 time.sleep(delay)
 
             except Exception as e:
