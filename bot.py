@@ -63,8 +63,12 @@ class LinkedInNotionBot:
         if not self.notion_token or not self.database_id:
             print("NOTION_TOKEN present       :", bool(self.notion_token))
             print("NOTION_DATABASE_ID present :", bool(self.database_id))
-            print("Variables vues par le process :",
+            print("Variables NOTION vues :",
                   [k for k in os.environ if "NOTION" in k.upper()])
+            print("--- TOUS les noms de variables vus par le process ---")
+            for k in sorted(os.environ):
+                print("  ", k)
+            print("----------------------------------------------------")
             raise RuntimeError("Variables NOTION manquantes")
 
         self.notion_headers = {
