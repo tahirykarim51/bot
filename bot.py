@@ -18,7 +18,7 @@ from datetime import datetime
 
 CHECK_INTERVAL = 1800          # 30 min entre deux passes
 F_TPR = "r7776000"             # 3 mois (90 j * 86400 s)
-MAX_PAGES = 30                 # pages LinkedIn parcourues (25 offres / page)
+MAX_PAGES = 10                 # pages LinkedIn parcourues (25 offres / page)
 SEARCH_KEYWORDS = "alternance cybersécurité"
 SEARCH_LOCATION = "France"
 
@@ -38,7 +38,7 @@ KEYWORDS_CYBER = [
     "soc", "siem", "csirt", "cert",
     "edr", "xdr", "dlp", "waf", "ids", "ips",
     "pentest", "pentester",
-    "red team", "blue team", "purple team",
+    "red team", "blue team",
     "grc", "gouvernance", "risque", "conformité",
     "rgpd", "gdpr", "ebios", "cnil", "dora", "pca", "pra",
     "iam", "pam", "active directory",
@@ -56,10 +56,15 @@ HEADERS = {
 
 class LinkedInNotionBot:
     def __init__(self):
-        self.notion_token = os.getenv("NOTION_TOKEN")
-        self.database_id = os.getenv("NOTION_DATABASE_ID")
+        # .strip() au cas ou un espace / saut de ligne se serait glisse
+        self.notion_token = (os.getenv("NOTION_TOKEN") or "").strip()
+        self.database_id = (os.getenv("NOTION_DATABASE_ID") or "").strip()
 
         if not self.notion_token or not self.database_id:
+            print("NOTION_TOKEN present       :", bool(self.notion_token))
+            print("NOTION_DATABASE_ID present :", bool(self.database_id))
+            print("Variables vues par le process :",
+                  [k for k in os.environ if "NOTION" in k.upper()])
             raise RuntimeError("Variables NOTION manquantes")
 
         self.notion_headers = {
