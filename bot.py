@@ -11,6 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import os
+import re
 import random
 from datetime import datetime
 
@@ -18,38 +19,73 @@ from datetime import datetime
 
 CHECK_INTERVAL = 1800          # 30 min entre deux passes
 F_TPR = "r7776000"             # 3 mois (90 j * 86400 s)
-MAX_PAGES = 10                 # pages LinkedIn parcourues (25 offres / page)
-SEARCH_KEYWORDS = "alternance cybersécurité"
+MAX_PAGES = 10                  # pages parcourues PAR requete (25 offres / page)
 SEARCH_LOCATION = "France"
+
+# Plusieurs requetes pour elargir la couverture : LinkedIn limite les resultats
+# par requete, donc on multiplie les angles. Les doublons sont geres automatiquement.
+SEARCH_QUERIES = [
+    "alternance cybersécurité",
+    "apprentissage cybersécurité",
+    "alternance sécurité informatique",
+    "alternance sécurité des systèmes d'information",
+    "alternance analyste sécurité",
+    "alternance SOC",
+    "alternance pentest",
+    "alternance RSSI",
+    "alternance GRC sécurité",
+    "alternance DevSecOps",
+    "alternance sécurité réseaux",
+    "alternance administrateur cybersécurité",
+    "alternance ingénieur cybersécurité",
+    "alternance threat intelligence",
+    "alternance gouvernance risque conformité",
+]
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
-
-KEYWORDS_ALTERNANCE = [
-    "alternance", "alternant", "apprenti", "apprenti(e)", "apprentissage"
-]
-
-KEYWORDS_CYBER = [
-    "cyber", "cybersécurité", "cybersecurity",
-    "security", "sécurité", "securite",
-    "it security", "information security",
-    "aws", "azure", "firewall", "pare-feu", "réseau", "réseaux", "network",
-    "ssi", "pssi", "iso 27001",
-    "soc", "siem", "csirt", "cert",
-    "edr", "xdr", "dlp", "waf", "ids", "ips",
-    "pentest", "pentester",
-    "red team", "blue team",
-    "grc", "gouvernance", "risque", "conformité",
-    "rgpd", "gdpr", "ebios", "cnil", "dora", "pca", "pra",
-    "iam", "pam", "active directory",
-    "infrastructure sécurisée", "sécurisé", "sécurisées",
-    "devsecops", "forensic", "incident", "threat", "vulnerability"
-]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"
 }
+
+# -------- Filtrage par mots-cles (regex avec frontieres de mots) --------
+#
+# ALTERNANCE : alternance, alternant(e), apprenti(e), apprentissage, apprentice (EN)
+ALTERNANCE_REGEX = re.compile(
+    r"\b(?:altern\w*|apprenti\w*|apprentissage)\b",
+    re.IGNORECASE,
+)
+
+# CYBER : on utilise des frontieres de mots (\b) pour eviter les faux positifs
+# comme "soc" dans "sociales"/"societe" ou "ids" dans un autre mot.
+CYBER_PATTERNS = [
+    r"cyber\w*",                 # cyber, cybersecurite, cyberdefense, cybersecurity
+    r"s[ée]curi\w*",             # securite, securise, securisation...
+    r"security", r"infosec", r"appsec",
+    r"information security", r"it security",
+    r"r[ée]seau\w*", r"network",
+    r"ssi", r"rssi", r"pssi", r"iso\s?27001", r"nist", r"owasp",
+    r"soc", r"siem", r"csirt", r"cert", r"noc",
+    r"edr", r"xdr", r"dlp", r"waf", r"ids", r"ips",
+    r"pentest\w*", r"red team", r"blue team", r"purple team",
+    r"grc", r"conformit[ée]", r"risque\w*", r"risk",
+    r"rgpd", r"gdpr", r"privacy", r"ebios", r"cnil", r"dora", r"pca", r"pra",
+    r"iam", r"pam", r"active directory", r"zero trust",
+    r"devsecops", r"forensic\w*", r"incident\w*", r"threat",
+    r"vuln[ée]rabilit\w*", r"vulnerability",
+    r"audit\w*", r"s[ûu]ret[ée]", r"r[ée]silience",
+    r"malware", r"ransomware", r"bastion", r"cryptographie", r"chiffrement",
+    r"monitoring", r"d[ée]tection", r"detection", r"endpoint",
+    r"protection des donn[ée]es",
+    r"protection de l.information",
+    r"protection du secret",
+]
+CYBER_REGEX = re.compile(
+    r"\b(?:" + "|".join(CYBER_PATTERNS) + r")\b",
+    re.IGNORECASE,
+)
 
 # ============================================
 
@@ -67,13 +103,6 @@ class LinkedInNotionBot:
             print("    Projet        :", os.getenv("RAILWAY_PROJECT_NAME"))
             print("    Service       :", os.getenv("RAILWAY_SERVICE_NAME"))
             print("    Environnement :", os.getenv("RAILWAY_ENVIRONMENT_NAME"))
-            print(">>> Mets tes variables sur CE service + CET environnement")
-            print("Variables NOTION vues :",
-                  [k for k in os.environ if "NOTION" in k.upper()])
-            print("--- TOUS les noms de variables vus par le process ---")
-            for k in sorted(os.environ):
-                print("  ", k)
-            print("----------------------------------------------------")
             raise RuntimeError("Variables NOTION manquantes")
 
         self.notion_headers = {
@@ -87,6 +116,12 @@ class LinkedInNotionBot:
         print(str(len(self.seen_urls)) + " offre(s) deja dans Notion")
 
     # -- Notion : lecture de l'existant (dedup) --
+
+    def _normalize(self, url):
+        # repare l'ancien bug de prefixe duplique (liens deja en base)
+        if url and url.startswith("https://www.linkedin.comhttps://"):
+            url = url[len("https://www.linkedin.com"):]
+        return url
 
     def load_existing_urls(self):
         urls = set()
@@ -103,7 +138,7 @@ class LinkedInNotionBot:
             data = r.json()
             for page in data.get("results", []):
                 prop = page.get("properties", {}).get("Lien", {})
-                link = prop.get("url")
+                link = self._normalize(prop.get("url"))
                 if link:
                     urls.add(link)
 
@@ -150,11 +185,7 @@ class LinkedInNotionBot:
     # -- Utils --
 
     def check_keywords(self, text):
-        t = text.lower()
-        return (
-            any(k in t for k in KEYWORDS_ALTERNANCE)
-            and any(k in t for k in KEYWORDS_CYBER)
-        )
+        return bool(ALTERNANCE_REGEX.search(text)) and bool(CYBER_REGEX.search(text))
 
     # -- LinkedIn scraping --
 
@@ -163,62 +194,70 @@ class LinkedInNotionBot:
         base_url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
         new_jobs = []
 
-        for page in range(MAX_PAGES):
-            params = {
-                "keywords": SEARCH_KEYWORDS,
-                "location": SEARCH_LOCATION,
-                "f_TPR": F_TPR,
-                "start": page * 25
-            }
+        for query in SEARCH_QUERIES:
+            print("  Requete :", query)
+            for page in range(MAX_PAGES):
+                params = {
+                    "keywords": query,
+                    "location": SEARCH_LOCATION,
+                    "f_TPR": F_TPR,
+                    "start": page * 25
+                }
 
-            try:
-                r = requests.get(base_url, headers=HEADERS,
-                                params=params, timeout=15)
-            except Exception as e:
-                print("Requete echouee", e)
-                break
-
-            if r.status_code != 200:
-                print("HTTP", r.status_code, "page", page)
-                break
-
-            soup = BeautifulSoup(r.text, "html.parser")
-            cards = soup.find_all("li")
-            if not cards:
-                break  # plus de resultats
-
-            for card in cards:
                 try:
-                    title_el = card.find("h3")
-                    company_el = card.find("h4")
-                    link_el = card.find("a", href=True)
-
-                    if not title_el or not link_el:
-                        continue
-
-                    title = title_el.text.strip()
-                    company = company_el.text.strip() if company_el else "N/A"
-                    url = "https://www.linkedin.com" + link_el["href"].split("?")[0]
-
-                    if url in self.seen_urls:
-                        continue
-
-                    text_blob = title + " " + company
-                    if not self.check_keywords(text_blob):
-                        continue
-
-                    new_jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": SEARCH_LOCATION,
-                        "url": url
-                    })
-                    self.seen_urls.add(url)
-
+                    r = requests.get(base_url, headers=HEADERS,
+                                    params=params, timeout=15)
                 except Exception as e:
-                    print("Parse error", e)
+                    print("  Requete echouee", e)
+                    break
 
-            time.sleep(random.uniform(1, 3))  # pause anti-blocage
+                if r.status_code != 200:
+                    print("  HTTP", r.status_code, "page", page)
+                    break
+
+                soup = BeautifulSoup(r.text, "html.parser")
+                cards = soup.find_all("li")
+                if not cards:
+                    break  # plus de resultats pour cette requete
+
+                for card in cards:
+                    try:
+                        title_el = card.find("h3")
+                        company_el = card.find("h4")
+                        link_el = card.find("a", href=True)
+
+                        if not title_el or not link_el:
+                            continue
+
+                        title = title_el.text.strip()
+                        company = company_el.text.strip() if company_el else "N/A"
+
+                        # L'API renvoie tantot une URL absolue, tantot relative
+                        href = link_el["href"].split("?")[0]
+                        if href.startswith("http"):
+                            url = href
+                        else:
+                            url = "https://www.linkedin.com" + href
+
+                        if url in self.seen_urls:
+                            continue
+
+                        text_blob = title + " " + company
+                        if not self.check_keywords(text_blob):
+                            continue
+
+                        new_jobs.append({
+                            "title": title,
+                            "company": company,
+                            "location": SEARCH_LOCATION,
+                            "url": url
+                        })
+                        self.seen_urls.add(url)
+
+                    except Exception as e:
+                        print("  Parse error", e)
+
+                time.sleep(random.uniform(1, 3))  # pause anti-blocage
 
         return new_jobs
 
