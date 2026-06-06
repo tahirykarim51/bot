@@ -63,6 +63,11 @@ class LinkedInNotionBot:
         if not self.notion_token or not self.database_id:
             print("NOTION_TOKEN present       :", bool(self.notion_token))
             print("NOTION_DATABASE_ID present :", bool(self.database_id))
+            print(">>> Le bot tourne dans :")
+            print("    Projet        :", os.getenv("RAILWAY_PROJECT_NAME"))
+            print("    Service       :", os.getenv("RAILWAY_SERVICE_NAME"))
+            print("    Environnement :", os.getenv("RAILWAY_ENVIRONMENT_NAME"))
+            print(">>> Mets tes variables sur CE service + CET environnement")
             print("Variables NOTION vues :",
                   [k for k in os.environ if "NOTION" in k.upper()])
             print("--- TOUS les noms de variables vus par le process ---")
