@@ -19,7 +19,7 @@ from datetime import datetime
 
 CHECK_INTERVAL = 1800          # 30 min entre deux passes
 F_TPR = "r7776000"             # 3 mois (90 j * 86400 s)
-MAX_PAGES = 10                  # pages parcourues PAR requete (25 offres / page)
+MAX_PAGES = 20                  # pages parcourues PAR requete (25 offres / page)
 SEARCH_LOCATION = "France"
 
 # Plusieurs requetes pour elargir la couverture : LinkedIn limite les resultats
