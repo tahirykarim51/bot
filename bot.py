@@ -17,7 +17,7 @@ from datetime import datetime
 
 # ================== CONFIG ==================
 
-CHECK_INTERVAL = 1800          # 30 min entre deux passes
+CHECK_INTERVAL = 3600          # 1 h entre deux passes
 F_TPR = "r7776000"             # 3 mois (90 j * 86400 s)
 MAX_PAGES = 20                  # pages parcourues PAR requete (25 offres / page)
 SEARCH_LOCATION = "France"
@@ -257,7 +257,9 @@ class LinkedInNotionBot:
                     except Exception as e:
                         print("  Parse error", e)
 
-                time.sleep(random.uniform(1, 3))  # pause anti-blocage
+                time.sleep(10)  # pause entre chaque page
+
+            time.sleep(60)  # pause entre chaque requete
 
         return new_jobs
 
